@@ -46,7 +46,7 @@ info:
     marketplace looks like", not as a protocol-level guarantee that every
     conformant marketplace requires bearer auth.
 servers:
-  - url: https://plugins.example-corp.com/marketplace
+  - url: https://plugins.acme.com/marketplace
     description: Example production marketplace base URL (per spec §3).
   - url: http://localhost:8090
     description: Local reference implementation (http-marketplace/server/registry-server.js).

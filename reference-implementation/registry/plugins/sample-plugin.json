@@ -1,0 +1,18 @@
+{
+  "name": "sample-plugin",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "artifact": {
+        "url": "./sample-plugin-1.0.0.tar.gz",
+        "mediaType": "application/gzip",
+        "sizeBytes": 1089,
+        "sha256": "23787fafab1233c601e46909792d47c88615b6683d74f0b2e638e34493e65a53",
+        "signature": null
+      },
+      "publishedAt": "2026-10-10T00:00:00Z",
+      "yanked": false,
+      "yankedReason": null
+    }
+  ]
+}

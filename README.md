@@ -24,9 +24,9 @@ repo, and have the client `git clone` it. This works, but:
   cannot do a shallow clone, which silently breaks the simplest possible
   self-hosted setup — a marketplace served from plain static files, S3,
   or a CDN.
-- Has no standard way to express "you're authenticated but not entitled
-  to this plugin," which matters for private/enterprise-controlled
-  catalogs.
+- Has no standard way to grant access per user or team — git's
+  all-or-nothing repo access doesn't let you say "this catalog is
+  public, but this one plugin is only for the security team."
 
 See [`spec/agent-marketplace-distribution-spec-draft.md`](spec/agent-marketplace-distribution-spec-draft.md)
 for the full draft protocol.
@@ -38,6 +38,7 @@ for the full draft protocol.
 | [`spec/agent-marketplace-distribution-spec-draft.md`](spec/agent-marketplace-distribution-spec-draft.md) | The protocol itself: discovery, manifest schema, artifact format, auth, client algorithm, open questions. |
 | [`spec/openapi.yaml`](spec/openapi.yaml) | Formal OpenAPI 3.1 companion schema for the manifest/artifact endpoints defined in the spec. |
 | [`spec/operations-guide.md`](spec/operations-guide.md) | Prose guidance on how an enterprise would actually stand up a conformant marketplace origin (TLS, CDN, auth) safely. |
+| [`reference-implementation/`](reference-implementation/) | A minimal, working client + server proving the protocol end-to-end (manifest fetch → auth → download → checksum verify → extract). No git anywhere in the path. See its own README to run it. |
 
 **Deliberately not in this repo yet:** review/approval workflows,
 entitlement management, telemetry, and webhook/event notifications. Those
@@ -49,7 +50,7 @@ separate proposal once there's signal on the core protocol.
 ## Status / discussion
 
 This spec is being proposed for discussion with the Agent Plugins TSC.
-Track the discussion thread here once posted: *(link to be added)*.
+Track the discussion thread here: **https://github.com/agentplugins/agent-plugins-spec/discussions/86**
 
 ## License
 

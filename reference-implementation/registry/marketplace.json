@@ -1,0 +1,30 @@
+{
+  "specVersion": "1.0",
+  "name": "acme-plugins",
+  "owner": {
+    "name": "Acme Corp",
+    "email": "plugins@acme.com",
+    "url": "https://acme.com"
+  },
+  "metadata": {
+    "description": "Reference implementation of the git-free HTTP marketplace distribution spec.",
+    "version": "2.0.0",
+    "updatedAt": "2026-10-10T00:00:00Z"
+  },
+  "auth": {
+    "type": "bearer",
+    "tokenUrl": null,
+    "scopeHint": "acme-plugins:read"
+  },
+  "capabilities": {
+    "search": false
+  },
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "description": "Minimal sample plugin with a single greet skill, used to prove the git-free HTTP marketplace protocol.",
+      "tags": ["poc", "demo"],
+      "latestVersion": "1.0.0"
+    }
+  ]
+}

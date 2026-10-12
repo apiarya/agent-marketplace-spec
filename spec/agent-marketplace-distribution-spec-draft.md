@@ -127,7 +127,7 @@ real unmodified Copilot CLI today.)
 A marketplace is identified by a single base URL, e.g.:
 
 ```
-https://plugins.example-corp.com/marketplace/
+https://plugins.acme.com/marketplace/
 ```
 
 The client fetches the manifest at:
@@ -154,11 +154,11 @@ length. See §10 (resolved) for the motivating scale discussion.
 ```jsonc
 {
   "specVersion": "1.0",
-  "name": "example-corp-plugins",
+  "name": "acme-plugins",
   "owner": {
     "name": "Example Corp",
-    "email": "plugins@example-corp.com",
-    "url": "https://example-corp.com"
+    "email": "plugins@acme.com",
+    "url": "https://acme.com"
   },
   "metadata": {
     "description": "Example Corp's internal plugin catalog",
@@ -168,7 +168,7 @@ length. See §10 (resolved) for the motivating scale discussion.
   "auth": {
     "type": "bearer",            // "none" | "bearer" | "mtls"
     "tokenUrl": null,             // optional: where to obtain a token (e.g. an OIDC device-code flow)
-    "scopeHint": "example-corp-plugins:read"
+    "scopeHint": "acme-plugins:read"
   },
   "capabilities": {
     "search": false               // see §4b — true if GET /search is exposed
@@ -351,6 +351,14 @@ separated, optional tier:
 
 ## 5. Authentication
 
+> **Note:** sections 5 and 5a describe the fuller auth surface this
+> protocol could standardize. The first-round TSC proposal (see the
+> linked Discussion in the repo README) intentionally does **not** ask
+> for 401/403 handling or `request_access_url` to be standardized yet —
+> it treats auth as ordinary, already-solved HTTP/operator policy. These
+> sections are kept here as the exploratory "fuller" version for a
+> possible later round, not part of the current ask.
+
 All requests (manifest and artifact fetches) MAY require authentication.
 Server behavior:
 
@@ -383,7 +391,7 @@ Content-Type: application/json
 {
   "error": "forbidden",
   "message": "Not entitled to sample-plugin",
-  "request_access_url": "https://plugins.example-corp.com/request-access?plugin=sample-plugin"
+  "request_access_url": "https://plugins.acme.com/request-access?plugin=sample-plugin"
 }
 ```
 
