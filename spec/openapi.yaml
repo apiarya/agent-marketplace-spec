@@ -1,0 +1,621 @@
+openapi: 3.1.0
+info:
+  title: Git-free HTTP Marketplace Distribution API
+  version: "1.1"
+  description: |
+    Formal API definition for the server side of the "git-free HTTP
+    marketplace distribution" protocol described in
+    [`agent-marketplace-distribution-spec-draft.md`](./agent-marketplace-distribution-spec-draft.md)
+    (sections 3-6). This is a companion artifact to that prose spec, not a
+    replacement for it — field semantics, governance primitives, and the
+    client install algorithm are defined there (§7-§8) and only
+    summarized here in schema `description`s.
+
+    A conformant marketplace exposes three kinds of HTTP resource (v0.2
+    two-tier manifest — spec §4, §4a, Changelog):
+
+    1. A manifest document (`marketplace.json`) — see `/marketplace.json`.
+       As of spec v0.2 this is a lightweight index: `plugins[]` entries
+       are summaries only (name/description/tags/latestVersion), not full
+       version history.
+    2. Zero or more per-plugin detail documents, one per plugin, fetched
+       lazily by name — see `/plugins/{name}.json`. These hold the
+       `versions[]` array (with artifact references) that used to be
+       inlined in the manifest under spec v0.1.
+    3. Zero or more plugin artifacts, referenced by relative or absolute
+       URL from a per-plugin detail document's `versions[].artifact.url`
+       — see `/{artifactPath}`.
+
+    Additionally, a marketplace MAY opt into an **optional dynamic search
+    tier** (spec §4b) by setting `capabilities.search: true` on its
+    manifest, exposing `GET /search` for paginated, filterable browsing.
+    This tier is additive and is not required for a conformant, fully
+    static-file-hostable marketplace of any catalog size.
+
+    **Known modeling limitation:** per spec §5, authentication is a
+    per-marketplace deployment choice declared by the manifest's own
+    `auth.type` field (`none` | `bearer` | `mtls`), not a static, per-route
+    property of the API shape. OpenAPI has no clean way to express
+    "security depends on a value returned by this same API", so this
+    document declares `bearerAuth` as the *default* security requirement
+    (reflecting the most common/production-recommended deployment, as used
+    by the reference implementation in `http-marketplace/`) and documents
+    the `auth.type: "none"` case only via an `anyOf`-style override
+    (an empty `security: []` alternative) plus prose on each operation.
+    Treat the security requirement here as "what a bearer-auth-enabled
+    marketplace looks like", not as a protocol-level guarantee that every
+    conformant marketplace requires bearer auth.
+servers:
+  - url: https://plugins.example-corp.com/marketplace
+    description: Example production marketplace base URL (per spec §3).
+  - url: http://localhost:8090
+    description: Local reference implementation (http-marketplace/server/registry-server.js).
+
+security:
+  - bearerAuth: []
+  - {}
+
+paths:
+  /marketplace.json:
+    get:
+      operationId: getManifest
+      summary: Fetch the marketplace manifest
+      description: |
+        Returns the marketplace catalog document. Per spec §3, clients
+        MUST follow HTTP redirects and MUST treat any non-2xx response as
+        a discovery failure.
+
+        Security note: if the returned manifest's `auth.type` is `"none"`,
+        this request requires no credential at all and the `bearerAuth`
+        security requirement below does not apply, despite being the
+        schema default (see the modeling-limitation note in the root
+        `info.description`).
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        "200":
+          description: Manifest retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Manifest"
+        "401":
+          description: |
+            Missing or invalid bearer token (spec §5). Only applicable
+            when the marketplace's `auth.type` is `bearer` or `mtls`.
+          headers:
+            WWW-Authenticate:
+              description: |
+                RFC 6750-style challenge, e.g.
+                `****** error="invalid_token"`.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: |
+            Authenticated but not entitled to view this manifest (spec §5,
+            e.g. scope mismatch against `auth.scopeHint`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /plugins/{name}.json:
+    get:
+      operationId: getPluginDetail
+      summary: Fetch a single plugin's detail document (version history + artifacts)
+      description: |
+        Returns the full version history and artifact references for one
+        plugin (spec §4a, new in v0.2). Clients fetch this lazily, after
+        finding the plugin by name in the lightweight manifest index
+        (spec §4), in order to resolve a version/artifact for install
+        (spec §8 step 2b). This is what moved out of the manifest's
+        `plugins[]` entries in v0.2 — see the spec Changelog.
+
+        The exact URL is a convention (`./plugins/{name}.json`, resolved
+        relative to the manifest URL, the same way artifact URLs are
+        resolved — spec §4, §6); `name` here is a template placeholder for
+        the plugin's `name` field as listed in the manifest index.
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The plugin's `name` as listed in the manifest's `plugins[]` index (spec §4).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Plugin detail document retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginDetail"
+        "401":
+          description: Missing or invalid bearer token (spec §5).
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Authenticated but not entitled to this plugin (spec §5).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No such plugin (e.g. stale or incorrect name) — spec §4a.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /search:
+    get:
+      operationId: searchPlugins
+      summary: Paginated, filterable plugin search (optional dynamic tier)
+      description: |
+        **Optional.** Only present when the manifest declares
+        `capabilities.search: true` (spec §4b, new in v0.2). A
+        `capabilities.search: false`-or-absent marketplace does not expose
+        this endpoint at all — it is fully static-file-hostable and leaves
+        search/filtering to the client, operating locally over the
+        lightweight index (spec §4).
+
+        Returns a paginated subset of the same lightweight summary objects
+        used in the manifest index (spec §4), plus pagination metadata.
+        Pagination is offset-based (`page`/`pageSize`/`totalCount`) rather
+        than cursor-based — see spec §4b for the reasoning (CDN
+        cacheability per query-parameter tuple, low catalog mutation rate
+        relative to request rate, and implementability without a stateful
+        cursor store).
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Free-text match against plugin `name` and `description` (spec §4b).
+          schema:
+            type: string
+        - name: tag
+          in: query
+          required: false
+          description: Filter to plugins carrying this tag (spec §4b, `plugins[].tags`). May be repeated.
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number. Defaults to 1.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          description: Number of results per page. Server MAY cap this below the requested value.
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+      responses:
+        "200":
+          description: Paginated search results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResults"
+        "401":
+          description: Missing or invalid bearer token (spec §5).
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Authenticated but not entitled to search this catalog (spec §5).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /{artifactPath}:
+    get:
+      operationId: getArtifact
+      summary: Fetch a plugin artifact (or its detached signature file)
+      description: |
+        Downloads the bytes at a path referenced by a per-plugin detail
+        document's `versions[].artifact.url` (or `.signature.url`) (spec
+        §4a, §6). `artifactPath` is a template placeholder: the actual
+        path is server- and catalog-specific (e.g.
+        `sample-plugin-1.0.0.tar.gz`) and is only ever discovered by first
+        fetching `/marketplace.json` and then the relevant
+        `/plugins/{name}.json` detail document — clients MUST NOT guess or
+        enumerate artifact paths.
+
+        Artifact URLs in a detail document are resolved relative to that
+        detail document's own URL by default (spec §4a), but MAY be
+        absolute and point at a different host entirely (e.g. a CDN or
+        object store); when absolute, this operation does not apply and
+        the artifact's own host's API contract governs instead.
+
+        Security note: same conditional-auth caveat as `getManifest`
+        applies here — whether a bearer token is required is governed by
+        the manifest's `auth.type`, not fixed by this API shape.
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - name: artifactPath
+          in: path
+          required: true
+          description: |
+            Path segment(s) of the artifact, as resolved from
+            `artifact.url` (or `artifact.signature.url`) relative to the
+            marketplace base URL. May contain additional `/` separators
+            (e.g. `plugins/sample-plugin-1.0.0.tar.gz`).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: |
+            Artifact bytes. Clients MUST verify `sha256` (and, if
+            present, `signature`) against the manifest before extraction
+            (spec §6).
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Missing or invalid bearer token (spec §5).
+          headers:
+            WWW-Authenticate:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Authenticated but not entitled to this artifact (spec §5).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: |
+            No artifact exists at this path (e.g. stale/incorrect URL, or
+            the version/file was removed from storage).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        RFC 6750 bearer token, used when the manifest declares
+        `auth.type: "bearer"`. Credential acquisition (login flow) is out
+        of scope for this spec (§4, §5) — `auth.tokenUrl` is only a hint.
+        Marketplaces declaring `auth.type: "mtls"` authenticate at the TLS
+        layer instead (not expressible as an OpenAPI security scheme) and
+        marketplaces declaring `auth.type: "none"` require no credential.
+
+  schemas:
+    Error:
+      type: object
+      description: Standard error body for 401/403/404 responses.
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: |
+            Short machine-readable error code. The reference
+            implementation uses `invalid_token` (401) and `not_found`
+            (404); `forbidden` is suggested for 403 but not mandated by
+            the spec.
+          examples:
+            - invalid_token
+            - forbidden
+            - not_found
+        message:
+          type: string
+          description: Optional human-readable detail.
+
+    Owner:
+      type: object
+      description: Marketplace owner/contact information (spec §4).
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        url:
+          type: string
+          format: uri
+
+    Metadata:
+      type: object
+      description: Free-form descriptive metadata about the marketplace (spec §4).
+      properties:
+        description:
+          type: string
+        version:
+          type: string
+          description: Catalog/manifest content version (not `specVersion`).
+        updatedAt:
+          type: string
+          format: date-time
+
+    AuthBlock:
+      type: object
+      description: |
+        Declares what kind of credential clients should present (spec
+        §4, §5). Credential acquisition itself is out of scope for this
+        spec.
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum:
+            - none
+            - bearer
+            - mtls
+        tokenUrl:
+          type:
+            - string
+            - "null"
+          format: uri
+          description: |
+            Optional hint for where to obtain a token (e.g. an OIDC
+            device-code flow endpoint). `null` when not applicable.
+        scopeHint:
+          type:
+            - string
+            - "null"
+          description: |
+            Optional free-form entitlement scope identifier used by the
+            server to decide 403s. Not a formal OAuth scope grammar.
+
+    Signature:
+      type:
+        - object
+        - "null"
+      description: |
+        Optional supply-chain signature reference for an artifact (spec
+        §6 step 3). `null` when the artifact is unsigned.
+      required:
+        - type
+        - url
+      properties:
+        type:
+          type: string
+          description: Signature scheme identifier.
+          examples:
+            - sigstore-bundle
+        url:
+          type: string
+          description: |
+            URL of the detached signature file, resolved the same way as
+            `artifact.url` (relative to the manifest URL by default).
+
+    Artifact:
+      type: object
+      description: |
+        Content-addressed, checksummed download reference for one plugin
+        version (spec §4a, §6). Replaces the legacy git-based `source`
+        field. Lives inside a per-plugin detail document (spec §4a, new
+        in v0.2) — no longer inlined in the manifest.
+      required:
+        - url
+        - mediaType
+        - sizeBytes
+        - sha256
+      properties:
+        url:
+          type: string
+          description: |
+            Relative (default) or absolute URL to the artifact. Relative
+            URLs are resolved against the containing per-plugin detail
+            document's own URL (spec §4a), not the manifest's URL.
+        mediaType:
+          type: string
+          description: MIME type of the artifact. Spec §6 mandates gzipped tar.
+          examples:
+            - application/gzip
+        sizeBytes:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          description: |
+            Lowercase hex-encoded SHA-256 digest of the artifact bytes.
+            Clients MUST verify this before extraction (spec §6 step 2).
+          pattern: "^[a-f0-9]{64}$"
+        signature:
+          $ref: "#/components/schemas/Signature"
+
+    PluginVersion:
+      type: object
+      description: One published (or yanked) version of a plugin (spec §4a, §7).
+      required:
+        - version
+        - artifact
+        - publishedAt
+        - yanked
+      properties:
+        version:
+          type: string
+          description: Semver strongly recommended (spec §7).
+        artifact:
+          $ref: "#/components/schemas/Artifact"
+        publishedAt:
+          type: string
+          format: date-time
+        yanked:
+          type: boolean
+          description: |
+            When `true`, clients MUST NOT newly-install this version
+            (already-installed copies may continue to be used) — spec §7.
+        yankedReason:
+          type:
+            - string
+            - "null"
+          description: Human-readable reason, required contextually when `yanked` is `true`.
+
+    PluginSummary:
+      type: object
+      description: |
+        One plugin's entry in the lightweight manifest index (spec §4,
+        v0.2) or in `/search` results (spec §4b). Intentionally omits
+        version history/artifact data — fetch the per-plugin detail
+        document (`PluginDetail`, spec §4a) via `GET /plugins/{name}.json`
+        for that.
+      required:
+        - name
+        - latestVersion
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          description: |
+            Free-form tags (new in v0.2, spec §4). Supports both local
+            client-side filtering of the static index and server-side
+            `?tag=` filtering via the optional `/search` endpoint (spec
+            §4b).
+          items:
+            type: string
+        latestVersion:
+          type: string
+
+    PluginDetail:
+      type: object
+      description: |
+        The full version history and artifact references for one plugin
+        (spec §4a, new in v0.2) — served at `GET /plugins/{name}.json`,
+        resolved relative to the manifest URL. This is exactly the
+        content that lived inline in a v0.1 `Plugin.versions[]` entry,
+        moved to its own per-plugin document so the manifest index stays
+        small regardless of catalog size.
+      required:
+        - name
+        - versions
+      properties:
+        name:
+          type: string
+          description: Must match the `name` used to look this document up in the manifest index.
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/PluginVersion"
+
+    Capabilities:
+      type: object
+      description: |
+        Declares optional dynamic capabilities a marketplace exposes on
+        top of the static baseline (spec §4b, new in v0.2).
+      properties:
+        search:
+          type: boolean
+          default: false
+          description: |
+            When `true`, this marketplace additionally exposes `GET
+            /search` (spec §4b). `false` or absent (default) means this
+            marketplace is static-file-hostable with no server logic, and
+            search/filtering is the client's responsibility over the
+            lightweight index (spec §4).
+
+    SearchResults:
+      type: object
+      description: |
+        Paginated response from the optional `GET /search` endpoint (spec
+        §4b, new in v0.2). Only present on marketplaces with
+        `capabilities.search: true`. Uses offset-based pagination — see
+        spec §4b for the reasoning versus a cursor.
+      required:
+        - page
+        - pageSize
+        - totalCount
+        - plugins
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          description: 1-based page number of this response.
+        pageSize:
+          type: integer
+          minimum: 1
+          description: Number of results per page (server-effective value, may differ from the request if capped).
+        totalCount:
+          type: integer
+          minimum: 0
+          description: Total number of plugins matching the query, across all pages.
+        plugins:
+          type: array
+          items:
+            $ref: "#/components/schemas/PluginSummary"
+
+    Manifest:
+      type: object
+      description: |
+        The top-level `marketplace.json` document (spec §4). A
+        conformant marketplace serves this at `GET {base_url}/marketplace.json`.
+        As of spec v0.2, this is a lightweight index — `plugins[]` entries
+        are `PluginSummary` objects only; full version history lives in
+        per-plugin detail documents (spec §4a, `PluginDetail`).
+      required:
+        - specVersion
+        - name
+        - owner
+        - plugins
+      properties:
+        specVersion:
+          type: string
+          examples:
+            - "1.0"
+        name:
+          type: string
+          description: |
+            Marketplace identifier. Spec §10 leaves open whether this
+            must be globally unique or always namespaced by owner/URL —
+            treat as opaque within a single client's local registry.
+        owner:
+          $ref: "#/components/schemas/Owner"
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+        auth:
+          $ref: "#/components/schemas/AuthBlock"
+        capabilities:
+          $ref: "#/components/schemas/Capabilities"
+        plugins:
+          type: array
+          items:
+            $ref: "#/components/schemas/PluginSummary"
